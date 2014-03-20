@@ -20,6 +20,7 @@
 #include <litmus/rt_domain.h>
 #include <litmus/litmus_proc.h>
 #include <litmus/sched_trace.h>
+#include <litmus/mailbox.h>
 
 #ifdef CONFIG_SCHED_CPU_AFFINITY
 #include <litmus/affinity.h>
@@ -625,6 +626,8 @@ static int __init _init_litmus(void)
 #ifdef CONFIG_SCHED_CPU_AFFINITY
 	init_topology();
 #endif
+
+	init_mailbox_buffer();
 
 	register_reboot_notifier(&shutdown_notifier);
 

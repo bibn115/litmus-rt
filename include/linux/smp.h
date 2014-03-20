@@ -88,6 +88,8 @@ void kick_all_cpus_sync(void);
  */
 extern void smp_send_pull_timers(int cpu);
 
+extern void smp_send_mailbox(int cpu);
+
 /*
  * Generic and arch helpers
  */
