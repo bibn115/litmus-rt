@@ -24,6 +24,8 @@ obj-y     = sched_plugin.o litmus.o \
 	    sched_pfp.o \
 	    mailbox.o
 
+obj-$(CONFIG_RELEASE_MASTER) += sched_gedf_mp.o
+
 obj-$(CONFIG_PLUGIN_CEDF) += sched_cedf.o
 obj-$(CONFIG_PLUGIN_PFAIR) += sched_pfair.o
 

@@ -251,6 +251,15 @@ struct rt_param {
 	/* PFAIR/PD^2 state. Allocated on demand. */
 	struct pfair_param*	pfair;
 
+	/* Per-task release timer */
+	struct hrtimer		release_timer;
+
+	/* Dedicated scheduler */
+	volatile int		safe_to_exit;
+	int			job_completed;
+	int			job_suspended;
+	int			job_exited;
+
 	/* Fields saved before BE->RT transition.
 	 */
 	int old_policy;
