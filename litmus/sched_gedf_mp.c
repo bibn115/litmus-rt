@@ -770,7 +770,8 @@ static void gedf_task_new(struct task_struct * t, int on_rq, int is_scheduled)
 		/* Not suspended.
 		 * Let master know it has something to do */
 		send_task_new(t);
-	}
+	} else
+		tsk_rt(t)->job_suspended = 1;
 
 	local_irq_restore(flags);
 }
