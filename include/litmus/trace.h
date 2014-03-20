@@ -28,14 +28,23 @@ struct timestamp {
 };
 
 /* tracing callbacks */
-feather_callback void msg_sent(unsigned long event, unsigned long to);
-feather_callback void msg_received(unsigned long event);
+feather_callback void msg_sent_to(unsigned long event, unsigned long to);
+feather_callback void msg_received_local(unsigned long event);
+
+feather_callback void msg_sent_local(unsigned long event);
+feather_callback void msg_received_from(unsigned long event, unsigned long from);
 
 #define MSG_TIMESTAMP_SENT(id, to) \
-	ft_event1(id, msg_sent, (unsigned long) to);
+	ft_event1(id, msg_sent_to, (unsigned long) (to));
 
 #define MSG_TIMESTAMP_RECEIVED(id) \
-	ft_event0(id, msg_received);
+	ft_event0(id, msg_received_local);
+
+#define MSG_TIMESTAMP_SENT_LOCAL(id) \
+	ft_event0(id, msg_sent_local);
+
+#define MSG_TIMESTAMP_RECEIVED_FROM(id, from) \
+	ft_event1(id, msg_received_from, (unsigned long) (from))
 
 feather_callback void save_cpu_timestamp(unsigned long event);
 feather_callback void save_cpu_timestamp_time(unsigned long event, unsigned long time_ptr);
@@ -136,6 +145,12 @@ feather_callback void save_cpu_task_latency(unsigned long event, unsigned long w
 
 #define TS_SEND_RESCHED_START(c)	MSG_TIMESTAMP_SENT(190, c)
 #define TS_SEND_RESCHED_END		MSG_TIMESTAMP_RECEIVED(191)
+
+#define TS_CLIENT_REQUEST_LATENCY_START		MSG_TIMESTAMP_SENT_LOCAL(160)
+#define TS_CLIENT_REQUEST_LATENCY_END(msg_from)	MSG_TIMESTAMP_RECEIVED_FROM(161, msg_from)
+
+#define TS_DSP_HANDLER_START		CPU_TIMESTAMP_CUR(162)
+#define TS_DSP_HANDLER_END		CPU_TIMESTAMP_CUR(163)
 
 #define TS_RELEASE_LATENCY(when)	CPU_LTIMESTAMP(208, &(when))
 
