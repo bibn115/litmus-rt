@@ -1185,6 +1185,8 @@ apicinterrupt RESCHEDULE_VECTOR \
 	reschedule_interrupt smp_reschedule_interrupt
 apicinterrupt PULL_TIMERS_VECTOR \
 	pull_timers_interrupt smp_pull_timers_interrupt
+apicinterrupt LITMUS_MAILBOX_VECTOR \
+	litmus_mailbox_interrupt smp_litmus_mailbox_interrupt
 #endif
 
 apicinterrupt ERROR_APIC_VECTOR \

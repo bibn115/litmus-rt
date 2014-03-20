@@ -148,6 +148,9 @@ static void __init smp_intr_init(void)
 	/* IPI for hrtimer pulling on remote cpus */
 	alloc_intr_gate(PULL_TIMERS_VECTOR, pull_timers_interrupt);
 
+	/* IPI for LITMUS^RT's dedicated scheduler mailbox */
+	alloc_intr_gate(LITMUS_MAILBOX_VECTOR, litmus_mailbox_interrupt);
+
 	/* Low priority IPI to cleanup after moving an irq */
 	set_intr_gate(IRQ_MOVE_CLEANUP_VECTOR, irq_move_cleanup_interrupt);
 	set_bit(IRQ_MOVE_CLEANUP_VECTOR, used_vectors);

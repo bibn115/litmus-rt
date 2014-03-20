@@ -26,6 +26,7 @@
 
 #include <litmus/preempt.h>
 #include <litmus/debug_trace.h>
+#include <litmus/mailbox.h>
 
 #include <asm/mtrr.h>
 #include <asm/tlbflush.h>
@@ -176,6 +177,15 @@ void smp_send_pull_timers(int cpu)
 	apic->send_IPI_mask(cpumask_of(cpu), PULL_TIMERS_VECTOR);
 }
 
+void smp_send_mailbox(int cpu)
+{
+	if (unlikely(cpu_is_offline(cpu))) {
+		WARN_ON(1);
+		return;
+	}
+	apic->send_IPI_mask(cpumask_of(cpu), LITMUS_MAILBOX_VECTOR);
+}
+
 /*
  * this function calls the 'stop' function on all other CPUs in the system.
  */
@@ -311,6 +321,15 @@ void smp_pull_timers_interrupt(struct pt_regs *regs)
 	irq_enter();
 	TRACE("pull timer interrupt\n");
 	hrtimer_pull();
+	irq_exit();
+}
+
+void smp_litmus_mailbox_interrupt(struct pt_regs *regs)
+{
+	irq_enter();
+	mailbox_arrived();
+	ack_APIC_irq();
+	inc_irq_stat(irq_call_count);
 	irq_exit();
 }
 

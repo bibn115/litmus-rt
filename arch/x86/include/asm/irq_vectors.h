@@ -130,6 +130,8 @@
  */
 #define PULL_TIMERS_VECTOR		0xdf
 
+#define LITMUS_MAILBOX_VECTOR		0xde
+
 #define NR_VECTORS			 256
 
 #define FPU_IRQ				  13
