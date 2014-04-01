@@ -25,6 +25,9 @@
 #include <litmus/affinity.h>
 #endif
 
+/* to set up domain/cpu mappings */
+#include <litmus/litmus_proc.h>
+
 #include <linux/module.h>
 
 /* cpu_entry_t - maintain the linked and scheduled state
@@ -942,6 +945,43 @@ static void gedf_finish_switch(struct task_struct *prev)
 }
 
 
+static struct domain_proc_info gedf_domain_proc_info;
+static long gedf_get_domain_proc_info(struct domain_proc_info **ret)
+{
+	*ret = &gedf_domain_proc_info;
+	return 0;
+}
+
+static void gedf_setup_domain_proc(void)
+{
+	int i, cpu;
+	int release_master = atomic_read(&release_master_cpu);
+	int num_rt_cpus = num_online_cpus() - (release_master != NO_CPU);
+	struct cd_mapping *map;
+
+	memset(&gedf_domain_proc_info, sizeof(gedf_domain_proc_info), 0);
+	init_domain_proc_info(&gedf_domain_proc_info, num_rt_cpus, 1);
+	gedf_domain_proc_info.num_cpus = num_rt_cpus;
+	gedf_domain_proc_info.num_domains = 1;
+
+	gedf_domain_proc_info.domain_to_cpus[0].id = 0;
+	i = 0;
+	for_each_online_cpu(cpu) {
+		if (cpu == release_master)
+			continue;
+		map = &gedf_domain_proc_info.cpu_to_domains[i];
+		map->id = cpu;
+		cpumask_set_cpu(0, map->mask);
+		++i;
+
+		/* add cpu to the domain */
+		cpumask_set_cpu(cpu,
+			gedf_domain_proc_info.domain_to_cpus[0].mask);
+	}
+}
+
+
+
 static long gedf_activate_plugin(void)
 {
 	int cpu;
@@ -976,6 +1016,9 @@ static long gedf_activate_plugin(void)
 		}
 #endif
 	}
+
+	gedf_setup_domain_proc();
+
 	return 0;
 }
 
@@ -991,6 +1034,7 @@ static struct sched_plugin gedf_plugin __cacheline_aligned_in_smp = {
 	.task_exit		= gedf_task_exit,
 	.task_cleanup		= gedf_task_cleanup,
 	.activate_plugin	= gedf_activate_plugin,
+	.get_domain_proc_info	= gedf_get_domain_proc_info,
 };
 
 
