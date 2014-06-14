@@ -1,0 +1,631 @@
+#include <linux/percpu.h>
+#include <linux/slab.h>
+#include <asm/uaccess.h>
+
+#include <litmus/sched_plugin.h>
+#include <litmus/preempt.h>
+#include <litmus/debug_trace.h>
+
+#include <litmus/litmus.h>
+#include <litmus/jobs.h>
+#include <litmus/budget.h>
+#include <litmus/litmus_proc.h>
+
+#include <litmus/reservation.h>
+#include <litmus/polling_reservations.h>
+
+struct pres_task_state {
+	struct task_client res_info;
+	int cpu;
+};
+
+struct pres_cpu_state {
+	raw_spinlock_t lock;
+
+	struct sup_reservation_environment sup_env;
+	struct hrtimer timer;
+
+	int cpu;
+	struct task_struct* scheduled;
+};
+
+static DEFINE_PER_CPU(struct pres_cpu_state, pres_cpu_state);
+
+#define cpu_state_for(cpu_id)	(&per_cpu(pres_cpu_state, cpu_id))
+#define local_cpu_state()	(&__get_cpu_var(pres_cpu_state))
+
+static struct pres_task_state* get_pres_state(struct task_struct *tsk)
+{
+	return (struct pres_task_state*) tsk_rt(tsk)->plugin_state;
+}
+
+static void task_departs(struct task_struct *tsk, int job_complete)
+{
+	struct pres_task_state* state = get_pres_state(tsk);
+	struct reservation* res;
+	struct reservation_client *client;
+
+	res    = state->res_info.reservation;
+	client = &state->res_info.client;
+
+	res->ops->client_departs(res, client, job_complete);
+}
+
+static void task_arrives(struct task_struct *tsk)
+{
+	struct pres_task_state* state = get_pres_state(tsk);
+	struct reservation* res;
+	struct reservation_client *client;
+
+	res    = state->res_info.reservation;
+	client = &state->res_info.client;
+
+	res->ops->client_arrives(res, client);
+}
+
+static void pres_update_timer(struct pres_cpu_state *state)
+{
+	lt_t update, now;
+
+	update = state->sup_env.next_scheduler_update;
+	now = state->sup_env.env.current_time;
+	if (update <= now) {
+		litmus_reschedule(state->cpu);
+	} else if (update != SUP_NO_SCHEDULER_UPDATE) {
+		/* reprogram only if not already set correctly */
+		if (!hrtimer_active(&state->timer) ||
+		    ktime_to_ns(hrtimer_get_expires(&state->timer)) != update) {
+			TRACE("canceling timer...\n");
+			hrtimer_cancel(&state->timer);
+			TRACE("setting scheduler timer for %llu\n", update);
+			hrtimer_start(&state->timer, ns_to_ktime(update),
+				HRTIMER_MODE_ABS_PINNED);
+		}
+	}
+}
+
+static enum hrtimer_restart on_scheduling_timer(struct hrtimer *timer)
+{
+	unsigned long flags;
+	enum hrtimer_restart restart = HRTIMER_NORESTART;
+	struct pres_cpu_state *state = local_cpu_state();
+	lt_t update, now;
+
+	raw_spin_lock_irqsave(&state->lock, flags);
+	sup_update_time(&state->sup_env, litmus_clock());
+
+	update = state->sup_env.next_scheduler_update;
+	now = state->sup_env.env.current_time;
+
+	TRACE_CUR("on_scheduling_timer at %llu, upd:%llu\n", now, update);
+
+	if (update <= now) {
+		litmus_reschedule_local();
+	} else if (update != SUP_NO_SCHEDULER_UPDATE) {
+		hrtimer_set_expires(timer, ns_to_ktime(update));
+		restart = HRTIMER_RESTART;
+	}
+
+	raw_spin_unlock_irqrestore(&state->lock, flags);
+
+	return restart;
+}
+
+static struct task_struct* pres_schedule(struct task_struct * prev)
+{
+	/* next == NULL means "schedule background work". */
+	struct pres_cpu_state *state = local_cpu_state();
+
+	raw_spin_lock(&state->lock);
+
+	BUG_ON(state->scheduled && state->scheduled != prev);
+	BUG_ON(state->scheduled && !is_realtime(prev));
+
+	/* update time */
+	state->sup_env.will_schedule = true;
+	sup_update_time(&state->sup_env, litmus_clock());
+
+	/* remove task from reservation if it blocks */
+	if (is_realtime(prev) && !is_running(prev))
+		task_departs(prev, is_completed(prev));
+
+	/* figure out what to schedule next */
+	state->scheduled = sup_dispatch(&state->sup_env);
+
+	/* program scheduler timer */
+	state->sup_env.will_schedule = false;
+	pres_update_timer(state);
+
+	/* Notify LITMUS^RT core that we've arrived at a scheduling decision. */
+	sched_state_task_picked();
+
+	raw_spin_unlock(&state->lock);
+
+	if (prev != state->scheduled && is_realtime(prev))
+		TRACE_TASK(prev, "descheduled.\n");
+	if (state->scheduled)
+		TRACE_TASK(state->scheduled, "scheduled.\n");
+
+	return state->scheduled;
+}
+
+static void resume_legacy_task_model_updates(struct task_struct *tsk)
+{
+	lt_t now;
+	if (is_sporadic(tsk)) {
+		/* If this sporadic task was gone for a "long" time and woke up past
+		 * its deadline, then give it a new budget by triggering a job
+		 * release. This is purely cosmetic and has no effect on the
+		 * P-RES scheduler. */
+
+		now = litmus_clock();
+		if (is_tardy(tsk, now))
+			release_at(tsk, now);
+	}
+}
+
+/* Called when the state of tsk changes back to TASK_RUNNING.
+ * We need to requeue the task.
+ */
+static void pres_task_resume(struct task_struct  *tsk)
+{
+	unsigned long flags;
+	struct pres_task_state* tinfo = get_pres_state(tsk);
+	struct pres_cpu_state *state = cpu_state_for(tinfo->cpu);
+
+	TRACE_TASK(tsk, "wake_up at %llu\n", litmus_clock());
+
+	raw_spin_lock_irqsave(&state->lock, flags);
+	/* Requeue if self-suspension was already processed. */
+	if (state->scheduled != tsk)
+	{
+		sup_update_time(&state->sup_env, litmus_clock());
+		task_arrives(tsk);
+		pres_update_timer(state);
+	}
+	raw_spin_unlock_irqrestore(&state->lock, flags);
+
+	resume_legacy_task_model_updates(tsk);
+}
+
+/* syscall backend for job completions */
+static long pres_complete_job(void)
+{
+	ktime_t next_release;
+	long err;
+
+	TRACE_CUR("pres_complete_job at %llu\n", litmus_clock());
+
+	tsk_rt(current)->completed = 1;
+	prepare_for_next_period(current);
+	next_release = ns_to_ktime(get_release(current));
+	set_current_state(TASK_INTERRUPTIBLE);
+	err = schedule_hrtimeout(&next_release, HRTIMER_MODE_ABS);
+
+	TRACE_CUR("pres_complete_job returns at %llu\n", litmus_clock());
+	return err;
+}
+
+static long pres_admit_task(struct task_struct *tsk)
+{
+	long err = -ESRCH;
+	unsigned long flags;
+	struct reservation *res;
+	struct pres_cpu_state *state;
+	struct pres_task_state *tinfo = kzalloc(sizeof(*tinfo), GFP_KERNEL);
+
+	if (!tinfo)
+		return -ENOMEM;
+
+	preempt_disable();
+
+	state = cpu_state_for(task_cpu(tsk));
+	raw_spin_lock_irqsave(&state->lock, flags);
+
+	res = sup_find_by_id(&state->sup_env, tsk_rt(tsk)->task_params.cpu);
+
+	/* found the appropriate reservation (or vCPU) */
+	if (res) {
+		task_client_init(&tinfo->res_info, tsk, res);
+		tinfo->cpu = task_cpu(tsk);
+		tsk_rt(tsk)->plugin_state = tinfo;
+		err = 0;
+	}
+
+	raw_spin_unlock_irqrestore(&state->lock, flags);
+
+	preempt_enable();
+
+	if (err)
+		kfree(tinfo);
+
+	return err;
+}
+
+static void task_new_legacy_task_model_updates(struct task_struct *tsk)
+{
+	lt_t now = litmus_clock();
+
+	/* the first job exists starting as of right now */
+	release_at(tsk, now);
+}
+
+static void pres_task_new(struct task_struct *tsk, int on_runqueue,
+			  int is_running)
+{
+	unsigned long flags;
+	struct pres_task_state* tinfo = get_pres_state(tsk);
+	struct pres_cpu_state *state = cpu_state_for(tinfo->cpu);
+
+	TRACE_TASK(tsk, "new RT task %llu (on_rq:%d, running:%d)\n",
+		   litmus_clock(), on_runqueue, is_running);
+
+	/* acquire the lock protecting the state and disable interrupts */
+	raw_spin_lock_irqsave(&state->lock, flags);
+
+	if (is_running) {
+		state->scheduled = tsk;
+		/* make sure this task should actually be running */
+		litmus_reschedule_local();
+	}
+
+	if (on_runqueue || is_running) {
+		sup_update_time(&state->sup_env, litmus_clock());
+		task_arrives(tsk);
+		pres_update_timer(state);
+	}
+
+	raw_spin_unlock_irqrestore(&state->lock, flags);
+
+	task_new_legacy_task_model_updates(tsk);
+}
+
+static void pres_task_exit(struct task_struct *tsk)
+{
+	unsigned long flags;
+	struct pres_task_state* tinfo = get_pres_state(tsk);
+	struct pres_cpu_state *state = cpu_state_for(tinfo->cpu);
+
+	raw_spin_lock_irqsave(&state->lock, flags);
+
+	if (state->scheduled == tsk)
+		state->scheduled = NULL;
+
+	/* remove from queues */
+	if (is_running(tsk)) {
+		sup_update_time(&state->sup_env, litmus_clock());
+		task_departs(tsk, 0);
+		pres_update_timer(state);
+	}
+
+	raw_spin_unlock_irqrestore(&state->lock, flags);
+
+	kfree(tsk_rt(tsk)->plugin_state);
+	tsk_rt(tsk)->plugin_state = NULL;
+}
+
+static long create_polling_reservation(
+	int res_type,
+	struct reservation_config *config)
+{
+	struct pres_cpu_state *state;
+	struct reservation* res;
+	struct polling_reservation *pres;
+	unsigned long flags;
+	int use_edf  = config->priority == LITMUS_NO_PRIORITY;
+	int periodic =  res_type == PERIODIC_POLLING;
+	long err = -EINVAL;
+
+	if (config->polling_params.budget >
+	    config->polling_params.period) {
+		printk(KERN_ERR "invalid polling reservation (%u): "
+		       "budget > period\n", config->id);
+		return -EINVAL;
+	}
+	if (config->polling_params.budget >
+	    config->polling_params.relative_deadline
+	    && config->polling_params.relative_deadline) {
+		printk(KERN_ERR "invalid polling reservation (%u): "
+		       "budget > deadline\n", config->id);
+		return -EINVAL;
+	}
+	if (config->polling_params.offset >
+	    config->polling_params.period) {
+		printk(KERN_ERR "invalid polling reservation (%u): "
+		       "offset > period\n", config->id);
+		return -EINVAL;
+	}
+
+	/* Allocate before we grab a spin lock.
+	 * Todo: would be nice to use a core-local allocation.
+	 */
+	pres = kzalloc(sizeof(*pres), GFP_KERNEL);
+	if (!pres)
+		return -ENOMEM;
+
+	state = cpu_state_for(config->cpu);
+	raw_spin_lock_irqsave(&state->lock, flags);
+
+	res = sup_find_by_id(&state->sup_env, config->id);
+	if (!res) {
+		polling_reservation_init(pres, use_edf, periodic,
+			config->polling_params.budget,
+			config->polling_params.period,
+			config->polling_params.relative_deadline,
+			config->polling_params.offset);
+		pres->res.id = config->id;
+		if (!use_edf)
+			pres->res.priority = config->priority;
+		sup_add_new_reservation(&state->sup_env, &pres->res);
+		err = config->id;
+	} else {
+		err = -EEXIST;
+	}
+
+	raw_spin_unlock_irqrestore(&state->lock, flags);
+
+	if (err < 0)
+		kfree(pres);
+
+	return err;
+}
+
+#define MAX_INTERVALS 1024
+
+static long create_table_driven_reservation(
+	struct reservation_config *config)
+{
+	struct pres_cpu_state *state;
+	struct reservation* res;
+	struct table_driven_reservation *td_res = NULL;
+	struct lt_interval *slots = NULL;
+	size_t slots_size;
+	unsigned int i, num_slots;
+	unsigned long flags;
+	long err = -EINVAL;
+
+
+	if (!config->table_driven_params.num_intervals) {
+		printk(KERN_ERR "invalid table-driven reservation (%u): "
+		       "no intervals\n", config->id);
+		return -EINVAL;
+	}
+
+	if (config->table_driven_params.num_intervals > MAX_INTERVALS) {
+		printk(KERN_ERR "invalid table-driven reservation (%u): "
+		       "too many intervals (max: %d)\n", config->id, MAX_INTERVALS);
+		return -EINVAL;
+	}
+
+	num_slots = config->table_driven_params.num_intervals;
+	slots_size = sizeof(slots[0]) * num_slots;
+	slots = kzalloc(slots_size, GFP_KERNEL);
+	if (!slots)
+		return -ENOMEM;
+
+	td_res = kzalloc(sizeof(*td_res), GFP_KERNEL);
+	if (!td_res)
+		err = -ENOMEM;
+	else
+		err = copy_from_user(slots,
+			config->table_driven_params.intervals, slots_size);
+
+	if (!err) {
+		/* sanity checks */
+		for (i = 0; !err && i < num_slots; i++)
+			if (slots[i].end <= slots[i].start) {
+				printk(KERN_ERR
+				       "invalid table-driven reservation (%u): "
+				       "invalid interval %u => [%llu, %llu]\n",
+				       config->id, i,
+				       slots[i].start, slots[i].end);
+				err = -EINVAL;
+			}
+
+		for (i = 0; !err && i + 1 < num_slots; i++)
+			if (slots[i + 1].start <= slots[i].end) {
+				printk(KERN_ERR
+				       "invalid table-driven reservation (%u): "
+				       "overlapping intervals %u, %u\n",
+				       config->id, i, i + 1);
+				err = -EINVAL;
+			}
+
+		if (slots[num_slots - 1].end >
+			config->table_driven_params.major_cycle_length) {
+			printk(KERN_ERR
+				"invalid table-driven reservation (%u): last "
+				"interval ends past major cycle %llu > %llu\n",
+				config->id,
+				slots[num_slots - 1].end,
+				config->table_driven_params.major_cycle_length);
+			err = -EINVAL;
+		}
+	}
+
+	if (!err) {
+		state = cpu_state_for(config->cpu);
+		raw_spin_lock_irqsave(&state->lock, flags);
+
+		res = sup_find_by_id(&state->sup_env, config->id);
+		if (!res) {
+			table_driven_reservation_init(td_res,
+				config->table_driven_params.major_cycle_length,
+				slots, num_slots);
+			td_res->res.id = config->id;
+			td_res->res.priority = config->priority;
+			sup_add_new_reservation(&state->sup_env, &td_res->res);
+			err = config->id;
+		} else {
+			err = -EEXIST;
+		}
+
+		raw_spin_unlock_irqrestore(&state->lock, flags);
+	}
+
+	if (err < 0) {
+		kfree(slots);
+		kfree(td_res);
+	}
+
+	return err;
+}
+
+static long pres_reservation_create(int res_type, void* __user _config)
+{
+	long ret = -EINVAL;
+	struct reservation_config config;
+
+	TRACE("Attempt to create reservation (%d)\n", res_type);
+
+	if (copy_from_user(&config, _config, sizeof(config)))
+		return -EFAULT;
+
+	if (config.cpu < 0 || !cpu_online(config.cpu)) {
+		printk(KERN_ERR "invalid polling reservation (%u): "
+		       "CPU %d offline\n", config.id, config.cpu);
+		return -EINVAL;
+	}
+
+	switch (res_type) {
+		case PERIODIC_POLLING:
+		case SPORADIC_POLLING:
+			ret = create_polling_reservation(res_type, &config);
+			break;
+
+		case TABLE_DRIVEN:
+			ret = create_table_driven_reservation(&config);
+			break;
+
+		default:
+			return -EINVAL;
+	};
+
+	return ret;
+}
+
+static struct domain_proc_info pres_domain_proc_info;
+
+static long pres_get_domain_proc_info(struct domain_proc_info **ret)
+{
+	*ret = &pres_domain_proc_info;
+	return 0;
+}
+
+static void pres_setup_domain_proc(void)
+{
+	int i, cpu;
+	int num_rt_cpus = num_online_cpus();
+
+	struct cd_mapping *cpu_map, *domain_map;
+
+	memset(&pres_domain_proc_info, sizeof(pres_domain_proc_info), 0);
+	init_domain_proc_info(&pres_domain_proc_info, num_rt_cpus, num_rt_cpus);
+	pres_domain_proc_info.num_cpus = num_rt_cpus;
+	pres_domain_proc_info.num_domains = num_rt_cpus;
+
+	i = 0;
+	for_each_online_cpu(cpu) {
+		cpu_map = &pres_domain_proc_info.cpu_to_domains[i];
+		domain_map = &pres_domain_proc_info.domain_to_cpus[i];
+
+		cpu_map->id = cpu;
+		domain_map->id = i;
+		cpumask_set_cpu(i, cpu_map->mask);
+		cpumask_set_cpu(cpu, domain_map->mask);
+		++i;
+	}
+}
+
+static long pres_activate_plugin(void)
+{
+	int cpu;
+	struct pres_cpu_state *state;
+
+	for_each_online_cpu(cpu) {
+		TRACE("Initializing CPU%d...\n", cpu);
+
+		state = cpu_state_for(cpu);
+
+		raw_spin_lock_init(&state->lock);
+		state->cpu = cpu;
+		state->scheduled = NULL;
+
+		sup_init(&state->sup_env);
+
+		hrtimer_init(&state->timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_PINNED);
+		state->timer.function = on_scheduling_timer;
+	}
+
+	pres_setup_domain_proc();
+
+	return 0;
+}
+
+static long pres_deactivate_plugin(void)
+{
+	int cpu;
+	struct pres_cpu_state *state;
+	struct reservation *res;
+
+	for_each_online_cpu(cpu) {
+		state = cpu_state_for(cpu);
+		raw_spin_lock(&state->lock);
+
+		hrtimer_cancel(&state->timer);
+
+		/* Delete all reservations --- assumes struct reservation
+		 * is prefix of containing struct. */
+
+		while (!list_empty(&state->sup_env.active_reservations)) {
+			res = list_first_entry(
+				&state->sup_env.active_reservations,
+			        struct reservation, list);
+			list_del(&res->list);
+			kfree(res);
+		}
+
+		while (!list_empty(&state->sup_env.inactive_reservations)) {
+			res = list_first_entry(
+				&state->sup_env.inactive_reservations,
+			        struct reservation, list);
+			list_del(&res->list);
+			kfree(res);
+		}
+
+		while (!list_empty(&state->sup_env.depleted_reservations)) {
+			res = list_first_entry(
+				&state->sup_env.depleted_reservations,
+			        struct reservation, list);
+			list_del(&res->list);
+			kfree(res);
+		}
+
+		raw_spin_unlock(&state->lock);
+	}
+
+	destroy_domain_proc_info(&pres_domain_proc_info);
+	return 0;
+}
+
+static struct sched_plugin pres_plugin = {
+	.plugin_name		= "P-RES",
+	.schedule		= pres_schedule,
+	.task_wake_up		= pres_task_resume,
+	.admit_task		= pres_admit_task,
+	.task_new		= pres_task_new,
+	.task_exit		= pres_task_exit,
+	.complete_job           = pres_complete_job,
+	.get_domain_proc_info   = pres_get_domain_proc_info,
+	.activate_plugin	= pres_activate_plugin,
+	.deactivate_plugin      = pres_deactivate_plugin,
+	.reservation_create     = pres_reservation_create,
+};
+
+static int __init init_pres(void)
+{
+	return register_sched_plugin(&pres_plugin);
+}
+
+module_init(init_pres);
+

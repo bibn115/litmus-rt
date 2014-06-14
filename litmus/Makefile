@@ -34,3 +34,5 @@ obj-$(CONFIG_SCHED_DEBUG_TRACE) += sched_trace.o
 obj-$(CONFIG_SCHED_OVERHEAD_TRACE) += trace.o
 
 obj-y += reservation.o polling_reservations.o
+
+obj-y += sched_pres.o
