@@ -401,6 +401,8 @@
         	CALL(sys_wait_for_ts_release)
 /* 390 */	CALL(sys_release_ts)
 		CALL(sys_null_call)
+	    CALL(sys_reservation_create)
+	    CALL(sys_reservation_destroy)
 
 #ifndef syscalls_counted
 .equ syscalls_padding, ((NR_syscalls + 3) & ~3) - NR_syscalls
