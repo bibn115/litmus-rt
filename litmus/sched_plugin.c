@@ -132,6 +132,17 @@ static long litmus_dummy_allocate_lock(struct litmus_lock **lock, int type,
 
 #endif
 
+static long  litmus_dummy_reservation_create(
+	int reservation_type,
+	void* __user config)
+{
+	return -EINVAL;
+}
+
+static long litmus_dummy_reservation_destroy(unsigned int reservation_id, int cpu)
+{
+	return -EINVAL;
+}
 
 /* The default scheduler plugin. It doesn't do anything and lets Linux do its
  * job.
@@ -193,6 +204,8 @@ int register_sched_plugin(struct sched_plugin* plugin)
 #endif
 	CHECK(admit_task);
 	CHECK(synchronous_release_at);
+	CHECK(reservation_destroy);
+	CHECK(reservation_create);
 
 	if (!plugin->wait_for_release_at)
 		plugin->wait_for_release_at = default_wait_for_release_at;

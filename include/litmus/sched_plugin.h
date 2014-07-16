@@ -77,6 +77,11 @@ typedef long (*wait_for_release_at_t)(lt_t release_time);
 /* Informs the plugin when a synchronous release takes place. */
 typedef void (*synchronous_release_at_t)(lt_t time_zero);
 
+/* Reservation creation/removal backends. Meaning of reservation_type and
+ * reservation_id are entirely plugin-specific. */
+typedef long (*reservation_create_t)(int reservation_type, void* __user config);
+typedef long (*reservation_destroy_t)(unsigned int reservation_id, int cpu);
+
 /************************ misc routines ***********************/
 
 
@@ -108,6 +113,10 @@ struct sched_plugin {
 
 	task_exit_t 		task_exit;
 	task_cleanup_t		task_cleanup;
+
+	/* Reservation support */
+	reservation_create_t	reservation_create;
+	reservation_destroy_t	reservation_destroy;
 
 #ifdef CONFIG_LITMUS_LOCKING
 	/*	locking protocols	*/
