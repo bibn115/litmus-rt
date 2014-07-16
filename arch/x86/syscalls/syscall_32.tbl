@@ -370,3 +370,5 @@
 360	i386	wait_for_ts_release	sys_wait_for_ts_release
 361	i386	release_ts		sys_release_ts
 362	i386	null_call		sys_null_call
+363 i386    reservation_create sys_reservation_create
+364 i386    reservation_destroy sys_reservation_destroy

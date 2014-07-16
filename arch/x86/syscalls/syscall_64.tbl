@@ -333,6 +333,9 @@
 360	common	wait_for_ts_release	sys_wait_for_ts_release
 361	common	release_ts		sys_release_ts
 362	common	null_call		sys_null_call
+363 common  reservation_create  sys_reservation_create
+364 common  reservation_destroy sys_reservation_destroy
+
 
 #
 # x32-specific system call numbers start at 512 to avoid cache impact
