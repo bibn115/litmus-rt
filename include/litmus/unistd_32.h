@@ -17,5 +17,7 @@
 #define __NR_wait_for_ts_release __LSC(9)
 #define __NR_release_ts		__LSC(10)
 #define __NR_null_call		__LSC(11)
+#define __NR_reservation_create	__LSC(12)
+#define __NR_reservation_destroy __LSC(13)
 
-#define NR_litmus_syscalls 12
+#define NR_litmus_syscalls 14

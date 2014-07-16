@@ -29,5 +29,10 @@ __SYSCALL(__NR_wait_for_ts_release, sys_wait_for_ts_release)
 __SYSCALL(__NR_release_ts, sys_release_ts)
 #define __NR_null_call				__LSC(11)
 __SYSCALL(__NR_null_call, sys_null_call)
+#define __NR_reservation_create			__LSC(12)
+__SYSCALL(__NR_reservation_create, sys_reservation_create)
+#define __NR_reservation_destroy		__LSC(13)
+__SYSCALL(__NR_reservation_destroy, sys_reservation_destroy)
 
-#define NR_litmus_syscalls 12
+
+#define NR_litmus_syscalls 14
