@@ -16,11 +16,6 @@ struct polling_reservation {
 void polling_reservation_init(struct polling_reservation *pres, int use_edf_prio,
 	int use_periodic_polling, lt_t budget, lt_t period, lt_t deadline, lt_t offset);
 
-struct lt_interval {
-	lt_t start;
-	lt_t end;
-};
-
 struct table_driven_reservation {
 	/* extend basic reservation */
 	struct reservation res;
