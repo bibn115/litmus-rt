@@ -24,6 +24,7 @@ struct table_driven_reservation {
 	unsigned int next_interval;
 	unsigned int num_intervals;
 	struct lt_interval *intervals;
+	struct lt_interval *cur_interval;
 };
 
 void table_driven_reservation_init(struct table_driven_reservation *tdres,

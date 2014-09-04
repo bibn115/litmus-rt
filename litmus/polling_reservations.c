@@ -366,15 +366,29 @@ static lt_t td_interval_length(struct lt_interval *ival)
 	return ival->end - ival->start;
 }
 
+static lt_t td_time_remaining_until_end(struct table_driven_reservation *tdres)
+{
+	lt_t now = tdres->res.env->current_time;
+	lt_t end = td_cur_major_cycle_start(tdres) + tdres->cur_interval->end;
+	TRACE("td_remaining(%u): start=%llu now=%llu end=%llu\n",
+		tdres->res.id,
+		td_cur_major_cycle_start(tdres) + tdres->cur_interval->start,
+		now, end);
+	if (now >=  end)
+		return 0;
+	else
+		return end - now;
+}
+
 static void td_replenish(
-	struct reservation *res
-)
+	struct reservation *res)
 {
 	struct table_driven_reservation *tdres =
 		container_of(res, struct table_driven_reservation, res);
 
 	/* replenish budget */
-	res->cur_budget = td_interval_length(tdres->intervals + tdres->next_interval);
+	tdres->cur_interval = tdres->intervals + tdres->next_interval;
+	res->cur_budget = td_interval_length(tdres->cur_interval);
 
 	tdres->next_interval = (tdres->next_interval + 1) % tdres->num_intervals;
 	if (tdres->next_interval)
@@ -404,12 +418,43 @@ static void td_replenish(
 	}
 }
 
+static void td_drain_budget(
+		struct reservation *res,
+		lt_t how_much)
+{
+	struct table_driven_reservation *tdres =
+		container_of(res, struct table_driven_reservation, res);
+
+	/* Table-driven scheduling: instead of tracking the budget, we compute
+	 * how much time is left in this allocation interval. */
+
+	switch (res->state) {
+		case RESERVATION_DEPLETED:
+		case RESERVATION_INACTIVE:
+			BUG();
+			break;
+
+		case RESERVATION_ACTIVE_IDLE:
+		case RESERVATION_ACTIVE:
+			res->cur_budget = td_time_remaining_until_end(tdres);
+			TRACE("td_drain_budget(%u): drained to budget=%llu\n",
+				res->id, res->cur_budget);
+			if (!res->cur_budget) {
+				res->env->change_state(res->env, res,
+					RESERVATION_DEPLETED);
+			} /* else: stay in current state */
+			break;
+	}
+}
+
+
+
 static struct reservation_ops td_ops = {
 	.dispatch_client = default_dispatch_client,
 	.client_arrives = td_client_arrives,
 	.client_departs = td_client_departs,
 	.replenish = td_replenish,
-	.drain_budget = common_drain_budget,
+	.drain_budget = td_drain_budget,
 };
 
 void table_driven_reservation_init(
@@ -431,6 +476,7 @@ void table_driven_reservation_init(
 	reservation_init(&tdres->res);
 	tdres->major_cycle = major_cycle;
 	tdres->intervals = intervals;
+	tdres->cur_interval = intervals;
 	tdres->num_intervals = num_intervals;
 	tdres->res.ops = &td_ops;
 }
