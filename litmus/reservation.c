@@ -180,18 +180,31 @@ static void sup_charge_budget(
 {
 	struct list_head *pos, *next;
 	struct reservation *res;
+	
+	int encountered_active = 0;
 
 	list_for_each_safe(pos, next, &sup_env->active_reservations) {
 		/* charge all ACTIVE_IDLE up to the first ACTIVE reservation */
 		res = list_entry(pos, struct reservation, list);
 		if (res->state == RESERVATION_ACTIVE) {
 			res->ops->drain_budget(res, delta);
-			/* stop at the first ACTIVE reservation */
-			break;
+			encountered_active = 1;
 		} else {
 			BUG_ON(res->state != RESERVATION_ACTIVE_IDLE);
 			res->ops->drain_budget(res, delta);
 		}
+		if (res->state == RESERVATION_ACTIVE ||
+			res->state == RESERVATION_ACTIVE_IDLE)
+		{
+			/* make sure scheduler is invoked when this reservation expires
+			 * its remaining budget */
+			 TRACE("requesting scheduler update for reservation %u in %llu nanoseconds\n",
+				res->id, res->cur_budget);
+			 sup_scheduler_update_after(sup_env, res->cur_budget);
+		}
+		if (encountered_active)
+			/* stop at the first ACTIVE reservation */
+			break;
 	}
 }
 
@@ -226,6 +239,7 @@ void sup_update_time(
 	/* If the time didn't advance, there is nothing to do.
 	 * This check makes it safe to call sup_advance_time() potentially
 	 * multiple times (e.g., via different code paths. */
+	TRACE("(sup_update_time) now: %llu, current_time: %llu\n", now, sup_env->env.current_time);
 	if (unlikely(now <= sup_env->env.current_time))
 		return;
 
