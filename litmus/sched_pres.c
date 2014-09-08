@@ -65,14 +65,22 @@ static void task_arrives(struct task_struct *tsk)
 
 static void pres_update_timer(struct pres_cpu_state *state)
 {
+	int local;
 	lt_t update, now;
 
 	update = state->sup_env.next_scheduler_update;
 	now = state->sup_env.env.current_time;
+
+	/* Be sure we're actually running on the right core,
+	 * as pres_update_timer() is also called from pres_task_resume(),
+	 * which might be called on any CPU when a thread resumes.
+	 */
+	local = local_cpu_state() == state;
+
 	if (update <= now) {
 		litmus_reschedule(state->cpu);
-	} else if (update != SUP_NO_SCHEDULER_UPDATE) {
-		/* reprogram only if not already set correctly */
+	} else if (likely(local && update != SUP_NO_SCHEDULER_UPDATE)) {
+		/* Reprogram only if not already set correctly. */
 		if (!hrtimer_active(&state->timer) ||
 		    ktime_to_ns(hrtimer_get_expires(&state->timer)) != update) {
 			TRACE("canceling timer...\n");
@@ -81,6 +89,25 @@ static void pres_update_timer(struct pres_cpu_state *state)
 			hrtimer_start(&state->timer, ns_to_ktime(update),
 				HRTIMER_MODE_ABS_PINNED);
 		}
+	} else if (unlikely(!local && update != SUP_NO_SCHEDULER_UPDATE)) {
+		/* Poke remote core only if timer needs to be set earlier than
+		 * it is currently set.
+		 */
+		TRACE("pres_update_timer for remote CPU %d (update=%llu, "
+		      "active:%d, set:%llu)\n",
+			state->cpu,
+			update,
+			hrtimer_active(&state->timer),
+			ktime_to_ns(hrtimer_get_expires(&state->timer)));
+		if (!hrtimer_active(&state->timer) ||
+		    ktime_to_ns(hrtimer_get_expires(&state->timer)) > update) {
+			TRACE("poking CPU %d so that it can update its "
+			       "scheduling timer (active:%d, set:%llu)\n",
+			       state->cpu,
+			       hrtimer_active(&state->timer),
+			       ktime_to_ns(hrtimer_get_expires(&state->timer)));
+			litmus_reschedule(state->cpu);
+		}
 	}
 }
 
@@ -88,8 +115,18 @@ static enum hrtimer_restart on_scheduling_timer(struct hrtimer *timer)
 {
 	unsigned long flags;
 	enum hrtimer_restart restart = HRTIMER_NORESTART;
-	struct pres_cpu_state *state = local_cpu_state();
+	struct pres_cpu_state *state;
 	lt_t update, now;
+
+	state = container_of(timer, struct pres_cpu_state, timer);
+
+	/* The scheduling timer should only fire on the local CPU, because
+	 * otherwise deadlocks via timer_cancel() are possible.
+	 * Note: this does not interfere with dedicated interrupt handling, as
+	 * even under dedicated interrupt handling scheduling timers for
+	 * budget enforcement must occur locally on each CPU.
+	 */
+	BUG_ON(state->cpu != raw_smp_processor_id());
 
 	raw_spin_lock_irqsave(&state->lock, flags);
 	sup_update_time(&state->sup_env, litmus_clock());
@@ -97,7 +134,8 @@ static enum hrtimer_restart on_scheduling_timer(struct hrtimer *timer)
 	update = state->sup_env.next_scheduler_update;
 	now = state->sup_env.env.current_time;
 
-	TRACE_CUR("on_scheduling_timer at %llu, upd:%llu\n", now, update);
+	TRACE_CUR("on_scheduling_timer at %llu, upd:%llu (for cpu=%d)\n",
+		now, update, state->cpu);
 
 	if (update <= now) {
 		litmus_reschedule_local();
@@ -173,12 +211,15 @@ static void pres_task_resume(struct task_struct  *tsk)
 	struct pres_task_state* tinfo = get_pres_state(tsk);
 	struct pres_cpu_state *state = cpu_state_for(tinfo->cpu);
 
-	TRACE_TASK(tsk, "wake_up at %llu\n", litmus_clock());
+	TRACE_TASK(tsk, "thread wakes up at %llu\n", litmus_clock());
 
 	raw_spin_lock_irqsave(&state->lock, flags);
 	/* Requeue if self-suspension was already processed. */
 	if (state->scheduled != tsk)
 	{
+		/* Assumption: litmus_clock() is synchronized across cores,
+		 * since we might not actually be executing on tinfo->cpu
+		 * at the moment. */
 		sup_update_time(&state->sup_env, litmus_clock());
 		task_arrives(tsk);
 		pres_update_timer(state);
@@ -270,6 +311,8 @@ static void pres_task_new(struct task_struct *tsk, int on_runqueue,
 	}
 
 	if (on_runqueue || is_running) {
+		/* Assumption: litmus_clock() is synchronized across cores
+		 * [see comment in pres_task_resume()] */
 		sup_update_time(&state->sup_env, litmus_clock());
 		task_arrives(tsk);
 		pres_update_timer(state);
@@ -293,6 +336,8 @@ static void pres_task_exit(struct task_struct *tsk)
 
 	/* remove from queues */
 	if (is_running(tsk)) {
+		/* Assumption: litmus_clock() is synchronized across cores
+		 * [see comment in pres_task_resume()] */
 		sup_update_time(&state->sup_env, litmus_clock());
 		task_departs(tsk, 0);
 		pres_update_timer(state);
