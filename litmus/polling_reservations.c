@@ -361,11 +361,6 @@ static void td_client_departs(
 	}
 }
 
-static lt_t td_interval_length(struct lt_interval *ival)
-{
-	return ival->end - ival->start;
-}
-
 static lt_t td_time_remaining_until_end(struct table_driven_reservation *tdres)
 {
 	lt_t now = tdres->res.env->current_time;
@@ -388,7 +383,9 @@ static void td_replenish(
 
 	/* replenish budget */
 	tdres->cur_interval = tdres->intervals + tdres->next_interval;
-	res->cur_budget = td_interval_length(tdres->cur_interval);
+	res->cur_budget = td_time_remaining_until_end(tdres);
+	TRACE("td_replenish(%u): %s budget=%llu\n", res->id,
+		res->cur_budget ? "" : "WARNING", res->cur_budget);
 
 	tdres->next_interval = (tdres->next_interval + 1) % tdres->num_intervals;
 	if (tdres->next_interval)
@@ -447,10 +444,44 @@ static void td_drain_budget(
 	}
 }
 
+static struct task_struct* td_dispatch_client(
+	struct reservation *res,
+	lt_t *for_at_most)
+{
+	struct task_struct *t;
+	struct table_driven_reservation *tdres =
+		container_of(res, struct table_driven_reservation, res);
 
+	/* usual logic for selecting a client */
+	t = default_dispatch_client(res, for_at_most);
+
+	TRACE_TASK(t, "td_dispatch_client(%u): selected, budget=%llu\n",
+		res->id, res->cur_budget);
+
+	/* check how much budget we have left in this time slot */
+	res->cur_budget = td_time_remaining_until_end(tdres);
+
+	TRACE_TASK(t, "td_dispatch_client(%u): updated to budget=%llu next=%d\n",
+		res->id, res->cur_budget, tdres->next_interval);
+
+	if (unlikely(!res->cur_budget)) {
+		/* Unlikely case: if we ran out of budget, the user configured
+		 * a broken scheduling table (overlapping table slots).
+		 * Not much we can do about this, but we can't dispatch a job
+		 * now without causing overload. So let's register this reservation
+		 * as depleted and wait for the next allocation. */
+		TRACE("td_dispatch_client(%u): budget unexpectedly depleted "
+			"(check scheduling table for unintended overlap)\n",
+			res->id);
+		res->env->change_state(res->env, res,
+			RESERVATION_DEPLETED);
+		return NULL;
+	} else
+		return t;
+}
 
 static struct reservation_ops td_ops = {
-	.dispatch_client = default_dispatch_client,
+	.dispatch_client = td_dispatch_client,
 	.client_arrives = td_client_arrives,
 	.client_departs = td_client_departs,
 	.replenish = td_replenish,
