@@ -40,8 +40,8 @@ void task_client_init(struct task_client *tc, struct task_struct *tsk,
 {
 	memset(&tc->client, sizeof(tc->client), 0);
 	tc->client.dispatch = task_client_dispatch;
+	tc->client.reservation = res;
 	tc->task = tsk;
-	tc->reservation = res;
 }
 
 static void sup_scheduler_update_at(
@@ -180,7 +180,7 @@ static void sup_charge_budget(
 {
 	struct list_head *pos, *next;
 	struct reservation *res;
-	
+
 	int encountered_active = 0;
 
 	list_for_each_safe(pos, next, &sup_env->active_reservations) {

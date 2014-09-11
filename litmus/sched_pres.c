@@ -45,7 +45,7 @@ static void task_departs(struct task_struct *tsk, int job_complete)
 	struct reservation* res;
 	struct reservation_client *client;
 
-	res    = state->res_info.reservation;
+	res    = state->res_info.client.reservation;
 	client = &state->res_info.client;
 
 	res->ops->client_departs(res, client, job_complete);
@@ -57,7 +57,7 @@ static void task_arrives(struct task_struct *tsk)
 	struct reservation* res;
 	struct reservation_client *client;
 
-	res    = state->res_info.reservation;
+	res    = state->res_info.client.reservation;
 	client = &state->res_info.client;
 
 	res->ops->client_arrives(res, client);

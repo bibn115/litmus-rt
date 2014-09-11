@@ -33,9 +33,11 @@ typedef struct task_struct * (*dispatch_t)  (
 );
 
 /* Something that can be managed in a reservation and that can yield
- * a process for dispatching. */
+ * a process for dispatching. Contains a pointer to the reservation
+ * to which it "belongs". */
 struct reservation_client {
 	struct list_head list;
+	struct reservation* reservation;
 	dispatch_t dispatch;
 };
 
@@ -135,7 +137,6 @@ struct task_struct* default_dispatch_client(
 /* "connector" reservation client to hook up tasks with reservations */
 struct task_client {
 	struct reservation_client client;
-	struct reservation* reservation;
 	struct task_struct *task;
 };
 
