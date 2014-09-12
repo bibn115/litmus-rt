@@ -63,7 +63,8 @@ static void task_arrives(struct task_struct *tsk)
 	res->ops->client_arrives(res, client);
 }
 
-static void pres_update_timer(struct pres_cpu_state *state)
+/* NOTE: drops state->lock */
+static void pres_update_timer_and_unlock(struct pres_cpu_state *state)
 {
 	int local;
 	lt_t update, now;
@@ -77,6 +78,10 @@ static void pres_update_timer(struct pres_cpu_state *state)
 	 */
 	local = local_cpu_state() == state;
 
+	/* Must drop state lock before calling into hrtimer_start(), which
+	 * may raise a softirq, which in turn may wake ksoftirqd. */
+	raw_spin_unlock(&state->lock);
+
 	if (update <= now) {
 		litmus_reschedule(state->cpu);
 	} else if (likely(local && update != SUP_NO_SCHEDULER_UPDATE)) {
@@ -86,8 +91,13 @@ static void pres_update_timer(struct pres_cpu_state *state)
 			TRACE("canceling timer...\n");
 			hrtimer_cancel(&state->timer);
 			TRACE("setting scheduler timer for %llu\n", update);
-			hrtimer_start(&state->timer, ns_to_ktime(update),
-				HRTIMER_MODE_ABS_PINNED);
+			/* We cannot use hrtimer_start() here because the
+			 * wakeup flag must be set to zero. */
+			__hrtimer_start_range_ns(&state->timer,
+					ns_to_ktime(update),
+					0 /* timer coalescing slack */,
+					HRTIMER_MODE_ABS_PINNED,
+					0 /* wakeup */);
 		}
 	} else if (unlikely(!local && update != SUP_NO_SCHEDULER_UPDATE)) {
 		/* Poke remote core only if timer needs to be set earlier than
@@ -170,14 +180,13 @@ static struct task_struct* pres_schedule(struct task_struct * prev)
 	/* figure out what to schedule next */
 	state->scheduled = sup_dispatch(&state->sup_env);
 
-	/* program scheduler timer */
-	state->sup_env.will_schedule = false;
-	pres_update_timer(state);
-
 	/* Notify LITMUS^RT core that we've arrived at a scheduling decision. */
 	sched_state_task_picked();
 
-	raw_spin_unlock(&state->lock);
+	/* program scheduler timer */
+	state->sup_env.will_schedule = false;
+	/* NOTE: drops state->lock */
+	pres_update_timer_and_unlock(state);
 
 	if (prev != state->scheduled && is_realtime(prev))
 		TRACE_TASK(prev, "descheduled.\n");
@@ -222,9 +231,11 @@ static void pres_task_resume(struct task_struct  *tsk)
 		 * at the moment. */
 		sup_update_time(&state->sup_env, litmus_clock());
 		task_arrives(tsk);
-		pres_update_timer(state);
-	}
-	raw_spin_unlock_irqrestore(&state->lock, flags);
+		/* NOTE: drops state->lock */
+		pres_update_timer_and_unlock(state);
+		local_irq_restore(flags);
+	} else
+		raw_spin_unlock_irqrestore(&state->lock, flags);
 
 	resume_legacy_task_model_updates(tsk);
 }
@@ -315,10 +326,11 @@ static void pres_task_new(struct task_struct *tsk, int on_runqueue,
 		 * [see comment in pres_task_resume()] */
 		sup_update_time(&state->sup_env, litmus_clock());
 		task_arrives(tsk);
-		pres_update_timer(state);
-	}
-
-	raw_spin_unlock_irqrestore(&state->lock, flags);
+		/* NOTE: drops state->lock */
+		pres_update_timer_and_unlock(state);
+		local_irq_restore(flags);
+	} else
+		raw_spin_unlock_irqrestore(&state->lock, flags);
 
 	task_new_legacy_task_model_updates(tsk);
 }
@@ -340,10 +352,11 @@ static void pres_task_exit(struct task_struct *tsk)
 		 * [see comment in pres_task_resume()] */
 		sup_update_time(&state->sup_env, litmus_clock());
 		task_departs(tsk, 0);
-		pres_update_timer(state);
-	}
-
-	raw_spin_unlock_irqrestore(&state->lock, flags);
+		/* NOTE: drops state->lock */
+		pres_update_timer_and_unlock(state);
+		local_irq_restore(flags);
+	} else
+		raw_spin_unlock_irqrestore(&state->lock, flags);
 
 	kfree(tsk_rt(tsk)->plugin_state);
 	tsk_rt(tsk)->plugin_state = NULL;
