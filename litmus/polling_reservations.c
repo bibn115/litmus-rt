@@ -84,6 +84,7 @@ static void periodic_polling_on_replenishment(
 	/* replenish budget */
 	res->cur_budget = pres->max_budget;
 	res->next_replenishment += pres->period;
+	res->budget_consumed = 0;
 
 	switch (res->state) {
 		case RESERVATION_DEPLETED:
@@ -128,6 +129,9 @@ static void common_drain_budget(
 		res->cur_budget = 0;
 	else
 		res->cur_budget -= how_much;
+
+	res->budget_consumed += how_much;
+	res->budget_consumed_total += how_much;
 
 	switch (res->state) {
 		case RESERVATION_DEPLETED:
@@ -384,6 +388,7 @@ static void td_replenish(
 	/* replenish budget */
 	tdres->cur_interval = tdres->intervals + tdres->next_interval;
 	res->cur_budget = td_time_remaining_until_end(tdres);
+	res->budget_consumed = 0;
 	TRACE("td_replenish(%u): %s budget=%llu\n", res->id,
 		res->cur_budget ? "" : "WARNING", res->cur_budget);
 
@@ -421,6 +426,9 @@ static void td_drain_budget(
 {
 	struct table_driven_reservation *tdres =
 		container_of(res, struct table_driven_reservation, res);
+
+	res->budget_consumed += how_much;
+	res->budget_consumed_total += how_much;
 
 	/* Table-driven scheduling: instead of tracking the budget, we compute
 	 * how much time is left in this allocation interval. */

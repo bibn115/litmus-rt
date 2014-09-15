@@ -117,6 +117,10 @@ struct reservation {
 	lt_t cur_budget;
 	lt_t next_replenishment;
 
+	/* budget stats */
+	lt_t budget_consumed; /* how much budget consumed in this allocation cycle? */
+	lt_t budget_consumed_total;
+
 	/* interaction with framework */
 	struct reservation_environment *env;
 	struct reservation_ops *ops;
