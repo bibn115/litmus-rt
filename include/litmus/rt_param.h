@@ -91,7 +91,7 @@ struct lt_interval {
 
 struct reservation_config {
 	unsigned int id;
-	unsigned int priority;
+	lt_t priority;
 	int  cpu;
 
 	union {
