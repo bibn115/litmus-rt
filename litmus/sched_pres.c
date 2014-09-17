@@ -17,6 +17,7 @@
 struct pres_task_state {
 	struct task_client res_info;
 	int cpu;
+	bool has_departed;
 };
 
 struct pres_cpu_state {
@@ -49,6 +50,7 @@ static void task_departs(struct task_struct *tsk, int job_complete)
 	client = &state->res_info.client;
 
 	res->ops->client_departs(res, client, job_complete);
+	state->has_departed = true;
 }
 
 static void task_arrives(struct task_struct *tsk)
@@ -60,6 +62,7 @@ static void task_arrives(struct task_struct *tsk)
 	res    = state->res_info.client.reservation;
 	client = &state->res_info.client;
 
+	state->has_departed = false;
 	res->ops->client_arrives(res, client);
 }
 
@@ -223,8 +226,8 @@ static void pres_task_resume(struct task_struct  *tsk)
 	TRACE_TASK(tsk, "thread wakes up at %llu\n", litmus_clock());
 
 	raw_spin_lock_irqsave(&state->lock, flags);
-	/* Requeue if self-suspension was already processed. */
-	if (state->scheduled != tsk)
+	/* Requeue only if self-suspension was already processed. */
+	if (tinfo->has_departed)
 	{
 		/* Assumption: litmus_clock() is synchronized across cores,
 		 * since we might not actually be executing on tinfo->cpu
@@ -234,8 +237,10 @@ static void pres_task_resume(struct task_struct  *tsk)
 		/* NOTE: drops state->lock */
 		pres_update_timer_and_unlock(state);
 		local_irq_restore(flags);
-	} else
+	} else {
+		TRACE_TASK(tsk, "resume event ignored, still scheduled\n");
 		raw_spin_unlock_irqrestore(&state->lock, flags);
+	}
 
 	resume_legacy_task_model_updates(tsk);
 }
@@ -280,6 +285,7 @@ static long pres_admit_task(struct task_struct *tsk)
 	if (res) {
 		task_client_init(&tinfo->res_info, tsk, res);
 		tinfo->cpu = task_cpu(tsk);
+		tinfo->has_departed = true;
 		tsk_rt(tsk)->plugin_state = tinfo;
 		err = 0;
 
