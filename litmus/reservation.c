@@ -122,8 +122,13 @@ static void sup_queue_active(
 	/* check for possible preemption */
 	if (res->state == RESERVATION_ACTIVE && !passed_active)
 		sup_env->next_scheduler_update = SUP_RESCHEDULE_NOW;
+	else {
+		/* Active means this reservation is draining budget => make sure
+		 * the scheduler is called to notice when the reservation budget has been
+		 * drained completely. */
+		sup_scheduler_update_after(sup_env, res->cur_budget);
+	}
 }
-
 
 static void sup_queue_reservation(
 	struct sup_reservation_environment* sup_env,
