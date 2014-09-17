@@ -264,7 +264,7 @@ static long pres_admit_task(struct task_struct *tsk)
 	unsigned long flags;
 	struct reservation *res;
 	struct pres_cpu_state *state;
-	struct pres_task_state *tinfo = kzalloc(sizeof(*tinfo), GFP_KERNEL);
+	struct pres_task_state *tinfo = kzalloc(sizeof(*tinfo), GFP_ATOMIC);
 
 	if (!tinfo)
 		return -ENOMEM;
