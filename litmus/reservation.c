@@ -206,6 +206,7 @@ static void sup_charge_budget(
 			/* stop at the first ACTIVE reservation */
 			break;
 	}
+	TRACE("finished charging budgets\n");
 }
 
 static void sup_replenish_budgets(struct sup_reservation_environment* sup_env)
@@ -222,6 +223,7 @@ static void sup_replenish_budgets(struct sup_reservation_environment* sup_env)
 			break;
 		}
 	}
+	TRACE("finished replenishing budgets\n");
 
 	/* request a scheduler update at the next replenishment instant */
 	res = list_first_entry_or_null(&sup_env->depleted_reservations,
