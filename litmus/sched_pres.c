@@ -282,6 +282,9 @@ static long pres_admit_task(struct task_struct *tsk)
 		tinfo->cpu = task_cpu(tsk);
 		tsk_rt(tsk)->plugin_state = tinfo;
 		err = 0;
+
+		/* disable LITMUS^RT's per-thread budget enforcement */
+		tsk_rt(tsk)->task_params.budget_policy = NO_ENFORCEMENT;
 	}
 
 	raw_spin_unlock_irqrestore(&state->lock, flags);
