@@ -251,13 +251,23 @@ static long pres_complete_job(void)
 	ktime_t next_release;
 	long err;
 
-	TRACE_CUR("pres_complete_job at %llu\n", litmus_clock());
+	TRACE_CUR("pres_complete_job at %llu (deadline: %llu)\n", litmus_clock(),
+		get_deadline(current));
 
 	tsk_rt(current)->completed = 1;
 	prepare_for_next_period(current);
 	next_release = ns_to_ktime(get_release(current));
-	set_current_state(TASK_INTERRUPTIBLE);
-	err = schedule_hrtimeout(&next_release, HRTIMER_MODE_ABS);
+	preempt_disable();
+	TRACE_CUR("next_release=%llu\n", get_release(current));
+	if (get_release(current) > litmus_clock()) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		preempt_enable_no_resched();
+		err = schedule_hrtimeout(&next_release, HRTIMER_MODE_ABS);
+	} else {
+		err = 0;
+		TRACE_CUR("TARDY: release=%llu now=%llu\n", get_release(current), litmus_clock());
+		preempt_enable();
+	}
 
 	TRACE_CUR("pres_complete_job returns at %llu\n", litmus_clock());
 	return err;
