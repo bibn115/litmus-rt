@@ -4,6 +4,7 @@
  */
 #ifndef _LINUX_RT_PARAM_H_
 #define _LINUX_RT_PARAM_H_
+#include "mc_param.h"
 
 /* Litmus time type. */
 typedef unsigned long long lt_t;
@@ -32,6 +33,13 @@ typedef enum {
 	QUANTUM_ENFORCEMENT, /* budgets are only checked on quantum boundaries */
 	PRECISE_ENFORCEMENT  /* budgets are enforced with hrtimers */
 } budget_policy_t;
+
+/*EDFVD: Deadline status values.
+ * */
+typedef enum {
+    DEADLINE_SAFE,    /*Enforcement timer reset set*/
+    DEADLINE_FAILED   /*Enforcement timer over run before task could complete*/
+}deadline_status_t;
 
 /* Release behaviors for jobs. PERIODIC and EARLY jobs
    must end by calling sys_complete_job() (or equivalent)
@@ -81,6 +89,7 @@ struct rt_task {
 	task_class_t	cls;
 	budget_policy_t  budget_policy;  /* ignored by pfair */
 	release_policy_t release_policy;
+    struct mc_task mc_param;
 };
 
 union np_flag {
@@ -169,6 +178,13 @@ struct rt_job {
 	 * Increase this sequence number when a job is released.
 	 */
 	unsigned int    job_no;
+
+    /*
+     * SCHED_EDFVD
+     *Paramter to store knowledge of the job missing its deadline in terms
+     *of an overrun enforcement timer.
+     * */
+    unsigned int deadline_status;
 };
 
 struct pfair_param;

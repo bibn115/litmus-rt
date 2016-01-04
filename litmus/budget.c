@@ -28,6 +28,9 @@ static enum hrtimer_restart on_enforcement_timeout(struct hrtimer *timer)
 	local_irq_save(flags);
 	TRACE("enforcement timer fired.\n");
 	et->armed = 0;
+    /*EDFVD: Update the deadline failed status to be used
+     * */
+    set_deadline_failed(current);
 	/* activate scheduler */
 	litmus_reschedule_local();
 	local_irq_restore(flags);

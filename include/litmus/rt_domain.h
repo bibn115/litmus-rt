@@ -10,7 +10,7 @@
 #define RELEASE_QUEUE_SLOTS 127 /* prime */
 
 struct _rt_domain;
-
+extern  int current_prio_level;
 typedef int (*check_resched_needed_t)(struct _rt_domain *rt);
 typedef void (*release_jobs_t)(struct _rt_domain *rt, struct bheap* tasks);
 
@@ -81,6 +81,11 @@ void rt_domain_init(rt_domain_t *rt, bheap_prio_t order,
 void __add_ready(rt_domain_t* rt, struct task_struct *new);
 void __merge_ready(rt_domain_t* rt, struct bheap *tasks);
 void __add_release(rt_domain_t* rt, struct task_struct *task);
+
+/*EDFVD: Function to handle movement of task in and out of release queue during criticality change.
+ * */
+void update_release_heap(rt_domain_t* rt,struct bheap* release_bin,bheap_prio_t higher_prio,int use_task_heap);
+void clear_release_heap(rt_domain_t* rt,struct bheap* release_bin,bheap_check_t compare,bheap_prio_t higher_prio);
 
 static inline struct task_struct* __take_ready(rt_domain_t* rt)
 {

@@ -92,6 +92,11 @@ struct sched_remote_shutdown {
  * With id != 0 and timeout != 0, poke watchdog timer and set new timeout.
  */
 #define SCHEDOP_watchdog    6
+
+/*EDFVD: Notification to the xen of overrun condition in litmus domain
+ * */
+#define SCHEDOP_criticality  7
+
 struct sched_watchdog {
     uint32_t id;                /* watchdog ID */
     uint32_t timeout;           /* timeout */

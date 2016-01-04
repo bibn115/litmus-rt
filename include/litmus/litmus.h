@@ -11,6 +11,8 @@
 #ifdef CONFIG_RELEASE_MASTER
 extern atomic_t release_master_cpu;
 #endif
+/*Save the current system criticality*/
+extern int current_criticality;
 
 /* in_list - is a given list_head queued on some list?
  */
@@ -47,6 +49,9 @@ void litmus_dealloc(struct task_struct *tsk);
 void litmus_do_exit(struct task_struct *tsk);
 int litmus_be_migrate_to(int cpu);
 
+/*EDF-VD: Function to raise critiality.
+*/
+int raise_system_criticality(void);
 #define is_realtime(t) 		((t)->policy == SCHED_LITMUS)
 #define rt_transition_pending(t) \
 	((t)->rt_param.transition_pending)
@@ -72,6 +77,12 @@ int litmus_be_migrate_to(int cpu);
 #define get_priority(t) 	(tsk_rt(t)->task_params.priority)
 #define get_class(t)        (tsk_rt(t)->task_params.cls)
 #define get_release_policy(t) (tsk_rt(t)->task_params.release_policy)
+
+/*EDFVD: MC task macros*/
+#define is_task_eligible(t)        (tsk_rt(t)->task_params.mc_param.criticality >= current_criticality)
+#define set_deadline_failed(t)     (tsk_rt(t)->job_params.deadline_status = DEADLINE_FAILED)
+#define clear_deadline_failed(t)   (tsk_rt(t)->job_params.deadline_status = DEADLINE_SAFE)
+#define check_deadline_failed(t)     (tsk_rt(t)->job_params.deadline_status == DEADLINE_FAILED)
 
 /* job_param macros */
 #define get_exec_time(t)    (tsk_rt(t)->job_params.exec_time)
